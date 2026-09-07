@@ -1,0 +1,36 @@
+# OS and editor files
+.DS_Store
+._*
+.idea/
+.vscode/
+*.swp
+*~
+
+# Build and dependency directories
+/target/
+/build/
+/dist/
+node_modules/
+.venv/
+__pycache__/
+*.py[cod]
+
+# Local credentials and runtime state
+.env
+.env.*
+!.env.example
+/.local/
+/runtime/
+/artifacts/
+/tmp/
+/downloads/
+*.log
+
+# Public evidence is text-only; keep raw captures and sessions local.
+/docs/evidence/*.png
+/docs/evidence/*.jpg
+/docs/evidence/*.jpeg
+/docs/evidence/*.txt
+*.jsonl
+*.bundle
+*.tar
