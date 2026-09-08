@@ -78,3 +78,10 @@ iOS 日志出现 `KeyEvent` 字段 `[2,4]`（press+chr）及 `[6]`（无状态�
 构建日志 `runtime/native-network-build.log`，会话日志 `runtime/native-host-stdout.log`；原始地址、接口选择、配置和日志保持本地。现有 API/sysinfo/heartbeat 失败告警独立于已成功的 NAT 与媒体会话，本次没有修改远端 API 服务。
 
 回归面：hbb_common 的 lib.rs 注册新模块、tcp.rs 的外部连接/具体地址监听、udp.rs 的非回环 UDP 创建；仅 macOS 且 Android host 与接口环境变量都存在时改行为。接口缺失/无效报错而不静默走回旧路径。没有调整加密握手、媒体格式、输入逻辑或 gitlink。
+
+
+### iOS 连接回归的当前状态
+
+21:35–21:38 iOS 请求到达桥接端，建立中继 TCP 后进入会话初始化，但约 30 秒超时，未进入 Android 后端。21:38 移除私有 network_interface 配置、无接口参数重启，iOS 仍超时。21:39 切换到 `.local/RustDeskAndroidBridge-before-network.app` 基线构建，iOS 同样未完成登录，因此不能将网卡绑定认定为唯一根因。
+
+21:40:46–21:40:50 Mac 原版客户端通过同一中继完成原生加密登录，后端收到客户端版本 1.4.7、启动 scrcpy、发送 80 帧并收到一个输入事件，最终由客户端主动关闭。依据仍为私有 native-host-stdout.log、native-backend.log 和原版 RustDesk 客户端日志。此对照证明基线的中继与 Android 媒体路径可用，不等同于 iOS 已恢复。iOS 当时界面一直“正在连接”；正在请求重启客户端及 Wi-Fi/蜂窝对照，根因未确认。现场保留无接口绑定的基线服务，不变更 Clash 或原版 RustDesk 配置。
