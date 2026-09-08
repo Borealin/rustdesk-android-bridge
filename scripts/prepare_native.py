@@ -23,14 +23,16 @@ def main():
     if actual != REV:
         raise SystemExit('Upstream revision differs; use a fresh checkout.')
     run('git','submodule','update','--init','--depth','1','libs/hbb_common',cwd=dest)
-    patch = ROOT/'native/rustdesk-1.4.7.patch'
-    check = subprocess.run(['git','apply','--check',str(patch)],cwd=dest,capture_output=True)
-    if check.returncode == 0:
-        run('git','apply',str(patch),cwd=dest)
-    else:
-        reverse = subprocess.run(['git','apply','--reverse','--check',str(patch)],cwd=dest,capture_output=True)
-        if reverse.returncode:
-            raise SystemExit('Checkout has conflicting changes; no reset was performed.')
+    for patch, target in [(ROOT/'native/rustdesk-1.4.7.patch', dest),
+                          (ROOT/'native/hbb-common-interface.patch', dest/'libs/hbb_common')]:
+        check = subprocess.run(['git','apply','--check',str(patch)],cwd=target,capture_output=True)
+        if check.returncode == 0:
+            run('git','apply',str(patch),cwd=target)
+        else:
+            reverse = subprocess.run(['git','apply','--reverse','--check',str(patch)],cwd=target,capture_output=True)
+            if reverse.returncode:
+                raise SystemExit('Checkout has conflicting changes; no reset was performed.')
+    shutil.copyfile(ROOT/'native/overlay/network_interface.rs',dest/'libs/hbb_common/src/network_interface.rs')
     shutil.copyfile(ROOT/'native/overlay/android_backend.rs',dest/'src/server/android_backend.rs')
     print('Prepared RustDesk 1.4.7 Android backend source.')
 

@@ -67,3 +67,18 @@ RUSTDESK_ANDROID_BACKEND_CONFIG="$PWD/runtime/native-backend.json" \
 原版 TCP tunnel 的 `set_raw()` 会清除 session key，不能用来包装本项目的未加密后端。本补丁在公网方向持续使用原版加密 FramedStream，未调用 set_raw。
 
 验证与未完成项见 [实测记录](../docs/evidence/native-encrypted-validation-2026-09-08.md)。
+
+## macOS TUN 与 NAT 探测
+
+若 TUN 改写本地 socket 地址，DIRECT 规则仍可能影响 RustDesk 复用源端口的 NAT 探测。可仅让独立 Android host 的原生 TCP/UDP socket 绑定物理接口：
+
+```bash
+python3 scripts/run_native.py --interface <PHYSICAL_INTERFACE> \
+  --serial <ADB_SERIAL> --server <SCRCPY_SERVER_JAR>
+```
+
+也可在私有 `runtime/native-backend.json` 设置 `network_interface`，命令行优先。不设则沿用原路由。接口不存在时启动报错，切换网卡后需更新选择。实现使用 macOS IP_BOUND_IF/IPV6_BOUND_IF；回环 worker 不绑定物理接口。仅在 Android host 环境变量存在时生效，不修改系统路由、Clash 配置或已安装的 RustDesk。
+
+`hbb-common-interface.patch` 修改固定 hbb_common 的 TCP/UDP socket 创建点并注册 `network_interface.rs` 模块。原 gitlink 不变，prepare 脚本同时应用两个补丁。范围仅为原生 TCP/UDP 会话、探测和监听；reqwest API 请求和 WebSocket 不是本次绑定覆盖面。API 失败告警不能直接当成远控中继失败。
+
+实测：默认 TUN 下第一 NAT 端口可达、复用端口的第二次连接超时；物理接口绑定下两次响应保持同一外部端口，原生 NAT 探测约 573 ms 成功，且观察到局域网加密直连。跨蜂窝网络 P2P 尚未确认，不能保证所有 NAT 组合都可直连。

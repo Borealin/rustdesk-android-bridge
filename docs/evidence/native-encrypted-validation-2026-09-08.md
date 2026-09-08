@@ -63,6 +63,18 @@ iOS 日志出现 `KeyEvent` 字段 `[2,4]`（press+chr）及 `[6]`（无状态�
 
 控制键按 press 生成 DOWN+UP；分离 down/up 和 repeat 有独立状态，断线释放 held keys。键盘 Home/End/Escape 使用编辑键语义，与悬浮导航 Home/Back 分开。Legacy 文本型字符不承诺组合快捷键；Map/Translate 携带的修饰键可透传。尚未验收硬件键盘完整布局、复杂组合和输入法连续组合提交的所有时序。
 
-20 项测试通过，覆盖真实接收路径中的 chr、seq、Unicode 粘贴封包、退格/回车、按键释放、修饰键及重复按下。运行版已更新，iOS 本地键盘 UI 复测待用户反馈。
+20 项测试通过，覆盖真实接收路径中的 chr、seq、Unicode 粘贴封包、退格/回车、按键释放、修饰键及重复按下。运行版已更新，用户随后反馈“没问题了”，iOS 本地键盘验收通过；完整物理键盘矩阵仍待验证。
 
 依据：[RustDesk Android InputService](https://github.com/rustdesk/rustdesk/blob/0c86d4616298f09435f6236599b300964aa61460/flutter/android/app/src/main/kotlin/com/carriez/flutter_hbb/InputService.kt)、[scrcpy 4.1 Controller](https://github.com/Genymobile/scrcpy/blob/v4.1/server/src/main/java/com/genymobile/scrcpy/control/Controller.java)。
+
+## TUN 影响 NAT 探测与定向接口绑定
+
+查询运行中的 Mihomo API：RustDesk 会话命中 DIRECT，但由 TUN 接入；不是走代理节点。绑定物理网卡与默认路由的并行原生 TestNatRequest 探针显示：默认路径访问 21116 约 278 ms，复用源地址/端口访问 21115 在 4 s 超时；物理绑定路径两次约 280/278 ms，服务器看到的外部端口一致。原始探针仅保存在私有 runtime。
+
+增加仅独立桥接进程生效的 macOS 网络接口选项，使用 IP_BOUND_IF/IPV6_BOUND_IF 绑定原生 TCP/UDP socket。没有改 Clash 配置、系统路由或原 Mac RustDesk。回环连接排除绑定。补丁编译成功、打包签名通过，prepare 脚本应用检查和 20 项 Python 回归通过。
+
+21:17:20 原生日志 `Tested nat type: ASYMMETRIC in 572.808708ms`。21:17:49 加密后端成功；21:18 的 socket 快照显示物理局域网 IP 到同网段客户端的直接 TCP 连接。随后来自另一公网地址的连接仍出现直连超时并请求中继；蜂窝网络直连与稳定性尚未确认，不把 Mac NAT 修复等同于任意网络的 P2P 保证。
+
+构建日志 `runtime/native-network-build.log`，会话日志 `runtime/native-host-stdout.log`；原始地址、接口选择、配置和日志保持本地。现有 API/sysinfo/heartbeat 失败告警独立于已成功的 NAT 与媒体会话，本次没有修改远端 API 服务。
+
+回归面：hbb_common 的 lib.rs 注册新模块、tcp.rs 的外部连接/具体地址监听、udp.rs 的非回环 UDP 创建；仅 macOS 且 Android host 与接口环境变量都存在时改行为。接口缺失/无效报错而不静默走回旧路径。没有调整加密握手、媒体格式、输入逻辑或 gitlink。

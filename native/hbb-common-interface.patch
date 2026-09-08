@@ -1,0 +1,54 @@
+diff --git a/src/lib.rs b/src/lib.rs
+index 2b35642..a134497 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,3 +1,5 @@
++#[cfg(target_os = "macos")]
++mod network_interface;
+ pub mod compress;
+ pub mod platform;
+ pub mod protos;
+diff --git a/src/tcp.rs b/src/tcp.rs
+index 2296edb..15d101d 100644
+--- a/src/tcp.rs
++++ b/src/tcp.rs
+@@ -76,6 +76,11 @@ pub(crate) fn new_socket(addr: std::net::SocketAddr, reuse: bool) -> Result<TcpS
+         socket.set_reuseport(true).ok();
+         socket.set_reuseaddr(true).ok();
+     }
++    #[cfg(target_os = "macos")]
++    if !addr.ip().is_unspecified() && !addr.ip().is_loopback() {
++        use std::os::fd::AsRawFd;
++        crate::network_interface::bind(socket.as_raw_fd(), addr.is_ipv4())?;
++    }
+     socket.bind(addr)?;
+     Ok(socket)
+ }
+@@ -93,6 +98,11 @@ impl FramedStream {
+                 crate::config::Config::get_any_listen_addr(remote_addr.is_ipv4())
+             };
+             if let Ok(socket) = new_socket(local, true) {
++                #[cfg(target_os = "macos")]
++                if !remote_addr.ip().is_loopback() {
++                    use std::os::fd::AsRawFd;
++                    crate::network_interface::bind(socket.as_raw_fd(), remote_addr.is_ipv4())?;
++                }
+                 if let Ok(Ok(stream)) =
+                     super::timeout(ms_timeout, socket.connect(remote_addr)).await
+                 {
+diff --git a/src/udp.rs b/src/udp.rs
+index fbdf332..b7fe0d3 100644
+--- a/src/udp.rs
++++ b/src/udp.rs
+@@ -19,6 +19,11 @@ fn new_socket(addr: SocketAddr, reuse: bool, buf_size: usize) -> Result<Socket,
+         SocketAddr::V4(..) => Socket::new(Domain::ipv4(), Type::dgram(), None),
+         SocketAddr::V6(..) => Socket::new(Domain::ipv6(), Type::dgram(), None),
+     }?;
++    #[cfg(target_os = "macos")]
++    if !addr.ip().is_loopback() {
++        use std::os::fd::AsRawFd;
++        crate::network_interface::bind(socket.as_raw_fd(), addr.is_ipv4())?;
++    }
+     if reuse {
+         // windows has no reuse_port, but its reuse_address
+         // almost equals to unix's reuse_port + reuse_address,
