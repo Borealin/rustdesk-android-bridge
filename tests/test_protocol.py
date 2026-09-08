@@ -116,6 +116,38 @@ class ProtocolTests(unittest.IsolatedAsyncioTestCase):
                          [(100,200,576,1280),(300,400,576,1280),(300,400,576,1280)])
         self.assertFalse(session.down)
 
+    async def test_keyboard_chr_seq_unicode_and_release_wire(self):
+        reader = asyncio.StreamReader()
+        # iOS single character press (chr), chr key-up, unflagged IME seq,
+        # Backspace press and Return press, all through the real receive loop.
+        for key in [pb(2,1)+pb(4,ord('q')), pb(4,ord('q')),
+                    pb(6,'hello'), pb(6,'中文😀'), pb(2,1)+pb(3,2), pb(2,1)+pb(3,27)]:
+            reader.feed_data(frame(pb(15,key)))
+        reader.feed_data(frame(pb(19,pb(9,'close'))))
+        session = Session(reader,None,SimpleNamespace(),'test-only-secret')
+        session.control = AsyncMock()
+        await session.inputs()
+        data = '中文😀'.encode()
+        self.assertEqual([c.args[0] for c in session.control.await_args_list], [
+            b'\x01\x00\x00\x00\x01q', b'\x01\x00\x00\x00\x05hello',
+            struct.pack('>BQBI',9,0,1,len(data))+data,
+            keycode(67,0)+keycode(67,1), keycode(66,0)+keycode(66,1)])
+
+    async def test_keyboard_map_modifiers_repeat_and_disconnect_release(self):
+        session = Session(None,None,SimpleNamespace(),'test-only-secret')
+        session.control = AsyncMock()
+        event = parse(pb(1,1)+pb(4,29)+pb(9,1)+pb(8,bytes([4,29])),repeated=(8,))
+        await session.keyboard(event)
+        await session.keyboard(event)
+        await session.release()
+        self.assertEqual([c.args[0] for c in session.control.await_args_list],
+            [keycode(29,0,4097),keycode(29,0,4097,1),keycode(29,1)])
+        self.assertFalse(session.held_keys)
+        session.control.reset_mock()
+        await session.keyboard({4:29,9:1})
+        await session.keyboard({1:1,4:0xd800})
+        session.control.assert_not_awaited()
+
     async def test_authenticated_android_target_defers_even_without_client_platform(self):
         import hashlib
         reader = asyncio.StreamReader()

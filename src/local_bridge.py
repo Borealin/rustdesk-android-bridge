@@ -38,7 +38,7 @@ def pb(number, value):
     return varint(number * 8) + varint(value)
 
 
-def parse(data):
+def parse(data, repeated=()):
     result, pos = {}, 0
 
     def read_varint():
@@ -71,7 +71,10 @@ def parse(data):
             pos += size
         else:
             raise ValueError("unsupported protobuf wire type")
-        result[number] = value
+        if number in repeated:
+            result.setdefault(number, []).append(value)
+        else:
+            result[number] = value
     return result
 
 
@@ -103,8 +106,8 @@ def touch(action, x, y, width, height):
                        width, height, 0 if action in (1, 3) else 65535, 0, 0)
 
 
-def keycode(code, action):
-    return struct.pack(">BBIII", 0, action, code, 0, 0)
+def keycode(code, action, meta=0, repeat=0):
+    return struct.pack(">BBIII", 0, action, code, repeat, meta)
 
 
 class Scrcpy:
@@ -209,6 +212,7 @@ class Session:
         self.press_started = None
         self.duplicate_downs = 0
         self.middle_started = None
+        self.held_keys = {}
         self.mobile_touch = False
         self.touch_injected = False
         self.pending_since = None
@@ -329,6 +333,9 @@ class Session:
         self.down = self.touch_injected = False
         self.pending_since = None
         self.touch_changed.set()
+        for code in list(self.held_keys):
+            await self.control(keycode(code, 1))
+        self.held_keys.clear()
 
     async def inputs(self):
         while True:
@@ -411,24 +418,80 @@ class Session:
                 self.events += 1
                 LOG.info("input_mouse count=%s kind=%s button=%s", self.events, kind, button)
             if 15 in msg:
-                e = parse(msg[15])
-                # Legacy control keys only; physical scancodes are deliberately not guessed.
-                mapping = {2:67, 5:112, 6:20, 8:4, 21:3, 22:21, 27:66, 28:22, 30:62, 31:61, 32:19, 72:66}
-                control = e.get(3)
-                code = mapping.get(control)
-                if control is not None and 33 <= control <= 42:
-                    code = 7 + control - 33
-                if code is not None:
-                    if e.get(2):
-                        await self.control(keycode(code, 0) + keycode(code, 1))
-                    else:
-                        await self.control(keycode(code, 0 if e.get(1) else 1))
-                elif (e.get(1) or e.get(2)) and (5 in e or 6 in e):
-                    text = e.get(6, b"") if 6 in e else chr(e[5]).encode()
-                    if len(text) <= 300:
-                        await self.control(b"\x01" + struct.pack(">I", len(text)) + text)
+                e = parse(msg[15], repeated=(8,))
+                await self.keyboard(e)
                 self.events += 1
                 LOG.info("input_key count=%s fields=%s", self.events, list(e))
+
+    async def keyboard(self, e):
+        mode = e.get(9, 0)
+        text = None
+        if 6 in e:
+            text = e[6].decode("utf-8")  # seq is a text commit, not a key-up.
+        elif (e.get(1) or e.get(2)) and (5 in e or (4 in e and mode == 0)):
+            value = e[5] if 5 in e else e[4]
+            if value > 0x10ffff or 0xd800 <= value <= 0xdfff:
+                LOG.warning("invalid Unicode scalar ignored")
+                return
+            text = chr(value)
+        if text is not None:
+            data = text.encode("utf-8")
+            if not data:
+                return
+            if len(data) > 262130:
+                LOG.warning("text commit exceeds scrcpy limit")
+                return
+            if all(32 <= ord(c) < 127 for c in text):
+                for offset in range(0, len(data), 300):
+                    chunk = data[offset:offset+300]
+                    await self.control(b"\x01" + struct.pack(">I", len(chunk)) + chunk)
+                LOG.info("keyboard_text route=keymap")
+            else:
+                # scrcpy INJECT_TEXT relies on KeyCharacterMap and cannot cover
+                # arbitrary Unicode. SET_CLIPBOARD + paste is its Unicode path.
+                await self.control(struct.pack(">BQBI", 9, 0, 1, len(data)) + data)
+                LOG.info("keyboard_text route=clipboard-paste")
+            return
+        modifiers = []
+        for item in e.get(8, []):
+            if isinstance(item, int):
+                modifiers.append(item)
+            else:
+                # Packed enum values; preserve multi-byte unknown enum values too.
+                value = shift = 0
+                for byte in item:
+                    value |= (byte & 127) << shift
+                    if byte < 128:
+                        modifiers.append(value); value = shift = 0
+                    else:
+                        shift += 7
+                        if shift >= 70: raise ValueError("invalid modifiers")
+                if shift: raise ValueError("truncated modifiers")
+        meta = 0
+        for modifier in modifiers:
+            meta |= {1:2,4:4096,23:65536,24:2,29:1,73:129,74:20480,75:34,3:1048576,63:2097152}.get(modifier,0)
+        mapping = {1:57,2:67,3:115,4:113,5:112,6:20,7:123,8:111,
+                   21:122,22:21,23:117,24:57,25:93,26:92,27:66,28:22,
+                   29:59,30:62,31:61,32:19,44:28,46:121,58:124,63:143,
+                   65:187,72:160,73:60,74:114,75:58,76:164,77:24,78:25,79:26}
+        mapping.update({k:131+i for i,k in enumerate([9,13,14,15,16,17,18,19,20,10,11,12])})
+        mapping.update({k:144+k-33 for k in range(33,43)})
+        code = mapping.get(e.get(3))
+        if 4 in e and mode in (1, 2):
+            # RustDesk maps physical codes to the Android target before sending.
+            code = e[4] if 1 <= e[4] <= 0xffff else None
+        if code is None:
+            return
+        if e.get(2):
+            await self.control(keycode(code,0,meta)+keycode(code,1,meta))
+            self.held_keys.pop(code, None)
+        elif e.get(1):
+            repeat = self.held_keys.get(code, (meta, -1))[1] + 1
+            self.held_keys[code] = (meta, repeat)
+            await self.control(keycode(code,0,meta,repeat))
+        elif code in self.held_keys:
+            self.held_keys.pop(code)
+            await self.control(keycode(code,1,meta))
 
     async def close(self):
         for t in self.tasks:

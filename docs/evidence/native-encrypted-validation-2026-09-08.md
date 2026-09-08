@@ -53,4 +53,16 @@ RustDesk 现有文件仅 core_main.rs（独立配置初始化）、server.rs（�
 
 新策略对 Android 被控目标统一启用，不依赖控制端 my_platform（现场客户端未匹配 iOS/Android，首次分平台门控未生效，已移除）：静止 DOWN 暂存；500 ms 内抬起合成连续 DOWN/UP，不重放接收端等待；移动超过 8 个视频像素即提交起点并实时转发拖动；静止超过 500 ms 开始真实按下，之后按原始 UP 释放。长按触发增加了约 500 ms 判定等待，这是当前兼容方案的明确取舍，并非改变手机系统阈值。桌面鼠标操作 Android 目标同样使用手势提交策略。待提交触摸断线时不补点击，已注入触摸仍 CANCEL。
 
-18 项回归测试通过，包括缺省平台认证启用、等待 350 ms 的静止 tap、真实长按提交、拖动和断线取消。服务已加载；软键盘与刻意长按 UI 复测待用户确认。此策略不能保证任意网络抖动、客户端版本或所有键盘的阈值，后续更精确方案需要客户端显式发送手势语义/时间。
+18 项回归测试通过，包括缺省平台认证启用、等待 350 ms 的静止 tap、真实长按提交、拖动和断线取消。服务已加载，用户反馈“可以了”，远端软键盘轻点已复测通过。此策略不能保证任意网络抖动、客户端版本或所有键盘的阈值，后续更精确方案需要客户端显式发送手势语义/时间。
+
+## 控制端本地键盘直接输入
+
+iOS 日志出现 `KeyEvent` 字段 `[2,4]`（press+chr）及 `[6]`（无状态标记的 seq）。旧 worker 漏掉 chr，并要求 seq 携带 down/press，因此字符和输入法文本被丢弃。原生 RustDesk Android InputService.onKeyEvent 对 seq 无条件视为提交，Legacy chr 在 down/press 转成 Unicode；Android 13+ 使用 InputConnection.commitText。
+
+本桥接继续保留 scrcpy 后端：Legacy chr/unicode 的有效字符输入、无标记 seq 文本提交、ControlKey、Map/Translate 的 Android 键码、packed/unpacked 修饰键分别处理。ASCII 可打印文本通过 scrcpy INJECT_TEXT；其他 Unicode、换行等通过 SET_CLIPBOARD(paste=true) 提交。后者会更新手机剪贴板，不读取或回传剪贴板内容，也不保证禁止粘贴的字段可输入。尚未引入手机 IME 插件或 AccessibilityService。
+
+控制键按 press 生成 DOWN+UP；分离 down/up 和 repeat 有独立状态，断线释放 held keys。键盘 Home/End/Escape 使用编辑键语义，与悬浮导航 Home/Back 分开。Legacy 文本型字符不承诺组合快捷键；Map/Translate 携带的修饰键可透传。尚未验收硬件键盘完整布局、复杂组合和输入法连续组合提交的所有时序。
+
+20 项测试通过，覆盖真实接收路径中的 chr、seq、Unicode 粘贴封包、退格/回车、按键释放、修饰键及重复按下。运行版已更新，iOS 本地键盘 UI 复测待用户反馈。
+
+依据：[RustDesk Android InputService](https://github.com/rustdesk/rustdesk/blob/0c86d4616298f09435f6236599b300964aa61460/flutter/android/app/src/main/kotlin/com/carriez/flutter_hbb/InputService.kt)、[scrcpy 4.1 Controller](https://github.com/Genymobile/scrcpy/blob/v4.1/server/src/main/java/com/genymobile/scrcpy/control/Controller.java)。
