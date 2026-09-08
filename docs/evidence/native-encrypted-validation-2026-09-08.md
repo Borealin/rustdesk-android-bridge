@@ -43,4 +43,4 @@ RustDesk 现有文件仅 core_main.rs（独立配置初始化）、server.rs（�
 
 修复在 UP 执行返回，并对中键按住时长采用上游 Android 的 200 ms 分界，分别发送 Android HOME=3 / APP_SWITCH=187。为避免异步定时任务和断线后的延迟操作，两者均在中键释放时执行；因此最近应用比上游 200 ms 定时触发稍晚，通常在客户端 500 ms 释放后出现。重复中键 DOWN 不重置计时，孤立 UP 不执行动作。正常触摸路径未修改。
 
-14 项协议与配置测试通过，服务已重启加载。客户端三键的 UI 验收待用户复测。依据为固定版本 `flutter/lib/models/input_model.dart` 的 onMobileBack/onMobileHome/onMobileApps，以及 Android InputService.kt 的中键分界逻辑。
+14 项协议与配置测试通过，服务已重启加载。用户重连后复测返回、Home、最近应用，反馈“正常了”，三键 UI 验收通过。依据为固定版本 `flutter/lib/models/input_model.dart` 的 onMobileBack/onMobileHome/onMobileApps，以及 Android InputService.kt 的中键分界逻辑。
