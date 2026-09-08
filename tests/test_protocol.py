@@ -2,12 +2,13 @@ import asyncio
 import struct
 import sys
 import unittest
+import tempfile
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from local_bridge import MAX_PACKET, Session, frame, keycode, parse, pb, receive, touch, unzigzag
+from local_bridge import MAX_PACKET, Session, frame, keycode, parse, pb, receive, touch, unzigzag, read_password_file
 
 
 class ProtocolTests(unittest.IsolatedAsyncioTestCase):
@@ -71,6 +72,20 @@ class ProtocolTests(unittest.IsolatedAsyncioTestCase):
         session.send = AsyncMock()
         await session.inputs()
         session.send.assert_awaited_once_with(client_probe)
+
+    def test_backend_password_file_permissions_and_length(self):
+        with tempfile.TemporaryDirectory() as directory:
+            p = Path(directory)/'backend-password'
+            p.write_text('test-only-password-with-32-characters')
+            p.chmod(0o600)
+            self.assertEqual(read_password_file(p), p.read_text())
+            p.chmod(0o644)
+            with self.assertRaisesRegex(ValueError, 'owner'):
+                read_password_file(p)
+            p.chmod(0o600)
+            p.write_text('short')
+            with self.assertRaisesRegex(ValueError, '24 to 256'):
+                read_password_file(p)
 
     async def test_disconnect_cancels_pressed_finger(self):
         session = Session(None,None,SimpleNamespace(),'test-only-secret')

@@ -9,3 +9,5 @@
 *.png binary
 *.jpg binary
 *.jpeg binary
+# Unified diff context uses single-space blank lines; check the applied source.
+native/*.patch -whitespace

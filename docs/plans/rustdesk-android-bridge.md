@@ -1,6 +1,6 @@
 # RustDesk Android 代理技术方案
 
-状态：本机兼容性原型，部分真机验证通过；不是完整远程访问产品。更新：2026-09-07。
+状态：原生 RustDesk 加密会话 + scrcpy 后端已实现并完成首轮真机视频验证；输入及故障矩阵待验收。更新：2026-09-08。
 
 ## 目标与范围
 
@@ -21,13 +21,14 @@ Python 标准库原型已与未修改的 RustDesk 1.4.7 客户端连通：手机
 - 基本触摸、部分键盘和导航事件、滚动、断线触点释放。
 - TestDelay 保活，避免重复回显本端探测消息。
 
-未实现：网络加密、ID 注册、中继、音频、文件传输、剪贴板同步、多设备管理和完整键盘兼容。监听固定为 `127.0.0.1`，不能作为公网或局域网部署产物。PeerInfo 的版本字段仅表示实验兼容目标。
+Python worker 自身仍不实现网络加密、ID 注册和中继，监听固定为 `127.0.0.1`。这些能力现在由原生 RustDesk 前端提供，worker 端口不得公开。音频、文件传输、剪贴板、多设备和完整键盘仍未实现。PeerInfo 的版本字段仅表示实验兼容目标。
 
 ## 架构
 
 ```mermaid
 flowchart LR
-    C[普通 RustDesk 客户端] <--> R[电脑代理：认证与协议适配]
+    C[普通 RustDesk 客户端] <-->|原生加密会话，直连或中继| N[RustDesk 原生被控端]
+    N <-->|认证后回环连接| R[Python scrcpy worker]
     R <--> V[视频适配器]
     R <--> I[输入适配器]
     V <-->|ADB 隧道| S[手机 scrcpy-server]
@@ -76,7 +77,7 @@ scrcpy 控制消息携带视频宽高，server 将其映射到设备坐标；代
 ## 选型与后续
 
 - 当前最小 Python 协议适配器用于先验证外部编码流与客户端兼容。
-- 正式版本可评估 RustDesk fork 的 Android 设备后端，以复用认证、加密、连接、中继及客户端行为；当前尚未实现该架构。
+- 用户已选择“原有加密会话 + scrcpy 后端”，并要求沿用 Mac 现有服务器配置。已添加固定 RustDesk 1.4.7 的最小补丁，复用原生会话和配置；不用另写 WebUI。
 - RustDesk 远程桌面中嵌套 scrcpy 窗口可作为对照，但有二次编码和桌面焦点依赖。
 - WebRTC/scrcpy 桥接项目可供参考，不能据此宣称 RustDesk 协议兼容。
 
@@ -86,11 +87,26 @@ scrcpy 控制消息携带视频宽高，server 将其映射到设备坐标；代
 
 | 阶段 | 目标 | 当前状态 |
 |---|---|---|
-| P1 | 本机客户端视频与基本输入 | 部分实测通过；10 项协议测试通过 |
+| P1 | 本机客户端视频与基本输入 | Python 原型实测通过；12 项协议与配置测试通过 |
 | P2 | 锁屏与 Private Space 全链路 | 待验证 |
-| P3 | 多设备、恢复、加密与远程部署 | 待设计和实现 |
+| P3 | 原生加密会话、现有服务器与 scrcpy 后端 | 首轮加密中继视频通过；新版输入与完整故障矩阵待验证 |
+| P4 | 多设备与分发安装包 | 待设计 |
 
-构建检查使用 `python3 -m py_compile src/local_bridge.py`，测试使用 `python3 -m unittest discover -s tests -v`。未进行 Cargo/Flutter 构建或固件烧录；原型测试不代表完整产品验收。
+构建检查使用 `python3 -m py_compile src/local_bridge.py`，测试使用 `python3 -m unittest discover -s tests -v`。已完成 Rust dylib 的 Cargo 构建、Flutter FFI 生成、本地 bundle 签名与启动；复用安装版 Flutter 资源，没有完整重编译 Flutter 或烧录固件。原型测试不代表完整产品验收。
+
+## 原生集成的当前设计
+
+实施分支：`codex/rustdesk-encrypted-backend`。构建与启动见 [native 指南](../../native/README.md)，实测见 [2026-09-08 验证](../evidence/native-encrypted-validation-2026-09-08.md)。
+
+- 固定 RustDesk 1.4.7 `0c86d4616298f09435f6236599b300964aa61460` 和 hbb_common `df6badca5bf81b4e9836256cf8e31c993ad70dd1`；手机保持 scrcpy 4.1，控制端不修改协议。
+- `core_main.rs` 初始化独立 APP_NAME、手机 ID 和永久密码，首次导入现有服务器配置。后续设置不被启动 JSON 覆盖。原 Mac 身份与配置保留。
+- `server.rs` 注册独立后端模块；`connection.rs` 在原认证与加密检查之后连接 worker，把允许的消息送入手机通道并跳过桌面订阅。特性未启用时保留原代码路径。
+- `android_backend.rs` 处理回环握手及消息白名单；Python 增加 owner-only 密码文件输入。网络流始终使用原生加密 FramedStream，后端只有回环地址。
+- 不复用原版 TCP tunnel：固定版本的 `set_raw()` 清除加密 key。嵌套 scrcpy 窗口因二次编码与焦点依赖不作为当前主线。WebUI 暂不开发，已能复用原生配置能力。
+
+当前事实：构建成功、独立 ID 公钥注册成功、现有中继加密会话成功、客户端手机实时画面可见、断线后 worker 清理及重连恢复已观察。原始证据只在忽略的 runtime 中保存，公开记录仅描述结果。
+
+待验证：新版点击/拖动、撤销输入权限、原生入口错误密码/非加密登录/非桌面模式的运行时拒绝，以及更长时间重连与锁屏矩阵。CUA 原生管道不可用，不能把截图或视频计数当成输入验收。原有服务器 NAT 探测与 API 有失败告警，未修改服务器或声称其整体健康。
 
 ## 上游参考
 

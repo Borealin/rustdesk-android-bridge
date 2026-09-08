@@ -10,6 +10,7 @@ import hmac
 import logging
 import secrets
 import signal
+import stat
 import struct
 import subprocess
 import time
@@ -368,7 +369,7 @@ class Session:
 
 
 async def main(args):
-    password = secrets.token_urlsafe(18)
+    password = read_password_file(args.password_file) if args.password_file else secrets.token_urlsafe(18)
     active = set()
     handlers = set()
 
@@ -409,12 +410,24 @@ async def main(args):
         await asyncio.gather(*list(handlers), return_exceptions=True)
 
 
+def read_password_file(path):
+    path = Path(path)
+    info = path.stat()
+    if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077:
+        raise ValueError("password file must be a regular file readable only by its owner")
+    value = path.read_text().strip()
+    if len(value) < 24 or len(value) > 256:
+        raise ValueError("backend password must contain 24 to 256 characters")
+    return value
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--serial", required=True)
     parser.add_argument("--server", required=True, help="scrcpy 4.1 server JAR")
     parser.add_argument("--port", type=int, default=21128)
     parser.add_argument("--launch-client", action="store_true")
+    parser.add_argument("--password-file", type=Path, help="owner-only backend password file for the native host")
     parser.add_argument("--log-file", type=Path, help="local diagnostic log (no input contents)")
     args = parser.parse_args()
     if not Path(args.server).is_file():
