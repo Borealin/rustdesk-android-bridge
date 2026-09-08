@@ -24,3 +24,15 @@
 ## 修改面
 
 RustDesk 现有文件仅 core_main.rs（独立配置初始化）、server.rs（模块声明）、connection.rs（加密认证后的媒体/输入分流与授权管理消息隔离）。新逻辑集中在 overlay/android_backend.rs；环境变量未设置时保留原路径。Python 仅增加密码文件接口，原坐标处理不改。
+
+## iOS 点击重复 DOWN 修复
+
+当晚 iOS 会话通过加密中继连接，20:54–20:55 的 worker 日志中，43 个完整按下/抬起周期出现 42 次重复 DOWN；按住时长中位数 359 ms，5 次达到 400 ms。设备当时 long_press_timeout 为 400 ms。此计数无法区分用户刻意长按与误判，不作为因果结论。
+
+固定 RustDesk 源码 `flutter/lib/common/widgets/remote_input.dart` 在移动被控端的 onLongPressDown 和 onTapUp 路径都可发送 DOWN；worker 原来把重复 DOWN 直接注入，违反单触点的事件序列。scrcpy 4.1 Controller.injectTouch 不会替调用方去重，重复 ACTION_DOWN 会再次设置 lastTouchDown。修复为状态转换式注入：已按下时忽略重复 DOWN，未按下时忽略 UP，保留 MOVE、真实长按和断线取消。新增接收侧 held_ms / duplicate_downs / write_ms 诊断，不记录坐标或文本。
+
+13 项测试通过，服务已重启加载修复；运行时已观察重复 DOWN 被去重及抬起写入耗时低于 1 ms。用户界面结果仍以复测反馈为准，不能把网络中继延迟都归因于此缺陷。
+
+网络检查：该会话实际存在到 Relay 的 TCP 连接，路由经过 Mac 的 TUN 接口；先验证 RustDesk 流量排除 TUN，再测直连或更近中继。没有修改全局代理、手机长按阈值或人为截短按压。
+
+源码依据：[scrcpy 4.1 Controller](https://github.com/Genymobile/scrcpy/blob/v4.1/server/src/main/java/com/genymobile/scrcpy/control/Controller.java)、[RustDesk 1.4.7 remote_input.dart](https://github.com/rustdesk/rustdesk/blob/0c86d4616298f09435f6236599b300964aa61460/flutter/lib/common/widgets/remote_input.dart)。

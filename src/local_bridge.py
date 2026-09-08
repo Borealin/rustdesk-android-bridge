@@ -206,6 +206,8 @@ class Session:
         self.phone = Scrcpy(args)
         self.down = False
         self.x = self.y = 0
+        self.press_started = None
+        self.duplicate_downs = 0
         self.frames = self.events = self.acks = 0
         self.tasks = []
 
@@ -321,8 +323,23 @@ class Session:
                     self.x = min(max(x, 0), self.phone.width - 1)
                     self.y = min(max(y, 0), self.phone.height - 1)
                 if button == 1 and kind in (1, 2):
-                    await self.control(touch(0 if kind == 1 else 1, self.x, self.y, self.phone.width, self.phone.height))
-                    self.down = kind == 1
+                    if kind == 1 and not self.down:
+                        self.press_started = time.monotonic()
+                        self.duplicate_downs = 0
+                        await self.control(touch(0, self.x, self.y, self.phone.width, self.phone.height))
+                        self.down = True
+                    elif kind == 1:
+                        # Mobile touch gestures may send DOWN both at contact and
+                        # at tap recognition. A held finger cannot go down twice.
+                        self.duplicate_downs += 1
+                    elif self.down:
+                        held_ms = (time.monotonic() - self.press_started) * 1000 if self.press_started is not None else 0
+                        started = time.monotonic()
+                        await self.control(touch(1, self.x, self.y, self.phone.width, self.phone.height))
+                        self.down = False
+                        LOG.info("touch_release held_ms=%.1f duplicate_downs=%s write_ms=%.1f",
+                                 held_ms, self.duplicate_downs, (time.monotonic() - started) * 1000)
+                        self.press_started = None
                 elif kind == 0 and self.down:
                     await self.control(touch(2, self.x, self.y, self.phone.width, self.phone.height))
                 elif kind == 1 and button in (2, 4):

@@ -116,6 +116,22 @@ class ProtocolTests(unittest.IsolatedAsyncioTestCase):
                          [(100,200,576,1280),(300,400,576,1280),(300,400,576,1280)])
         self.assertFalse(session.down)
 
+    async def test_mobile_duplicate_down_and_orphan_up_are_not_injected(self):
+        reader = asyncio.StreamReader()
+        # Mobile recognizer sends MOVE, DOWN, MOVE, DOWN, UP for one tap.
+        # Include a stray release before/after to check the contact boundary.
+        for payload in ['5202080a', '520610c801189003', '52020809',
+                        '520610c801189003', '52020809', '5202080a', '5202080a']:
+            reader.feed_data(frame(bytes.fromhex(payload)))
+        reader.feed_data(frame(pb(19,pb(9,'close'))))
+        session = Session(reader,None,SimpleNamespace(),'test-only-secret')
+        session.phone.width,session.phone.height = 576,1280
+        session.control = AsyncMock()
+        await session.inputs()
+        self.assertEqual([c.args[0][1] for c in session.control.await_args_list], [0,2,1])
+        self.assertEqual(session.duplicate_downs, 1)
+        self.assertFalse(session.down)
+
     async def test_move_to_origin_is_not_treated_as_missing_position(self):
         reader = asyncio.StreamReader()
         # Move to bottom/right, then legitimately move to (0,0), then click.
