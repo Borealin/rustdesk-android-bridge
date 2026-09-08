@@ -209,6 +209,11 @@ class Session:
         self.press_started = None
         self.duplicate_downs = 0
         self.middle_started = None
+        self.mobile_touch = False
+        self.touch_injected = False
+        self.pending_since = None
+        self.touch_changed = asyncio.Event()
+        self.press_position = (0, 0)
         self.frames = self.events = self.acks = 0
         self.tasks = []
 
@@ -230,6 +235,10 @@ class Session:
             if not hmac.compare_digest(login.get(2, b""), digest):
                 await self.send(pb(8, pb(1, "Wrong Password")))
                 continue
+            # The controlled target is Android regardless of the client's
+            # platform string (some clients omit or report it differently).
+            self.mobile_touch = True
+            LOG.info("android_touch_deferred=True")
             option = parse(login.get(6, b""))
             decoding = parse(option.get(10, b""))
             LOG.info("authenticated client_version=%s decoding=%s", login.get(11, b"").decode(),
@@ -247,7 +256,7 @@ class Session:
         await self.send(pb(8, pb(2, peer)))
         LOG.info("login_response_sent")
         self.tasks = [asyncio.create_task(self.video()), asyncio.create_task(self.inputs()),
-                      asyncio.create_task(self.heartbeat())]
+                      asyncio.create_task(self.heartbeat()), asyncio.create_task(self.touch_deadlines())]
         done, _ = await asyncio.wait(self.tasks, return_when=asyncio.FIRST_COMPLETED)
         for t in done:
             t.result()
@@ -294,10 +303,32 @@ class Session:
             LOG.info("heartbeat frames=%s inputs=%s acks=%s", self.frames, self.events, self.acks)
             await asyncio.sleep(10)
 
+    async def commit_touch(self):
+        if self.down and not self.touch_injected:
+            self.touch_injected = True
+            x, y = self.press_position
+            await self.control(touch(0, x, y, self.phone.width, self.phone.height))
+
+    async def touch_deadlines(self):
+        # Mobile RustDesk recognizers send an early DOWN before a tap is resolved.
+        # Match its Android host's 100 ms tap + 400 ms long-press decision window.
+        while True:
+            self.touch_changed.clear()
+            if self.down and not self.touch_injected and self.pending_since is not None:
+                remaining = max(0, self.pending_since + 0.5 - time.monotonic())
+                try:
+                    await asyncio.wait_for(self.touch_changed.wait(), remaining)
+                except asyncio.TimeoutError:
+                    await self.commit_touch()
+            else:
+                await self.touch_changed.wait()
+
     async def release(self):
-        if self.down:
+        if self.down and (not self.mobile_touch or self.touch_injected):
             await self.control(touch(3, self.x, self.y, self.phone.width, self.phone.height))
-            self.down = False
+        self.down = self.touch_injected = False
+        self.pending_since = None
+        self.touch_changed.set()
 
     async def inputs(self):
         while True:
@@ -327,8 +358,12 @@ class Session:
                     if kind == 1 and not self.down:
                         self.press_started = time.monotonic()
                         self.duplicate_downs = 0
-                        await self.control(touch(0, self.x, self.y, self.phone.width, self.phone.height))
                         self.down = True
+                        self.press_position = (self.x, self.y)
+                        self.pending_since = self.press_started
+                        self.touch_changed.set()
+                        if not self.mobile_touch:
+                            await self.commit_touch()
                     elif kind == 1:
                         # Mobile touch gestures may send DOWN both at contact and
                         # at tap recognition. A held finger cannot go down twice.
@@ -336,13 +371,23 @@ class Session:
                     elif self.down:
                         held_ms = (time.monotonic() - self.press_started) * 1000 if self.press_started is not None else 0
                         started = time.monotonic()
+                        if not self.touch_injected:
+                            # A resolved stationary tap: do not replay recognizer/network dwell.
+                            await self.commit_touch()
                         await self.control(touch(1, self.x, self.y, self.phone.width, self.phone.height))
-                        self.down = False
+                        self.down = self.touch_injected = False
+                        self.pending_since = None
+                        self.touch_changed.set()
                         LOG.info("touch_release held_ms=%.1f duplicate_downs=%s write_ms=%.1f",
                                  held_ms, self.duplicate_downs, (time.monotonic() - started) * 1000)
                         self.press_started = None
                 elif kind == 0 and self.down:
-                    await self.control(touch(2, self.x, self.y, self.phone.width, self.phone.height))
+                    if not self.touch_injected:
+                        dx, dy = self.x - self.press_position[0], self.y - self.press_position[1]
+                        if dx * dx + dy * dy > 8 * 8:
+                            await self.commit_touch()
+                    if self.touch_injected:
+                        await self.control(touch(2, self.x, self.y, self.phone.width, self.phone.height))
                 elif kind == 2 and button in (2, 8):
                     # Current mobile clients use Back; retain the old right-button alias.
                     await self.control(keycode(4, 0) + keycode(4, 1))

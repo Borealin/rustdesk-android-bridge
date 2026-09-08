@@ -44,3 +44,13 @@ RustDesk 现有文件仅 core_main.rs（独立配置初始化）、server.rs（�
 修复在 UP 执行返回，并对中键按住时长采用上游 Android 的 200 ms 分界，分别发送 Android HOME=3 / APP_SWITCH=187。为避免异步定时任务和断线后的延迟操作，两者均在中键释放时执行；因此最近应用比上游 200 ms 定时触发稍晚，通常在客户端 500 ms 释放后出现。重复中键 DOWN 不重置计时，孤立 UP 不执行动作。正常触摸路径未修改。
 
 14 项协议与配置测试通过，服务已重启加载。用户重连后复测返回、Home、最近应用，反馈“正常了”，三键 UI 验收通过。依据为固定版本 `flutter/lib/models/input_model.dart` 的 onMobileBack/onMobileHome/onMobileApps，以及 Android InputService.kt 的中键分界逻辑。
+
+## 远端软键盘轻点误作长按
+
+用户明确反馈：点击远端 Android 软键盘，q/w 得到长按候选 1/2。重复 DOWN 去重修复保持了接收侧 350 ms 左右的按住时长，不能单独解决该场景。
+
+核对固定 RustDesk Android InputService.kt：startGesture 先缓存路径；移动、endGesture 或 tap timeout + long-press timeout 到期后才 dispatchGesture，不是收到 DOWN 就立即注入。scrcpy 控制接口直接注入原始 DOWN，旧桥接把移动端识别等待完整暴露给键盘。
+
+新策略对 Android 被控目标统一启用，不依赖控制端 my_platform（现场客户端未匹配 iOS/Android，首次分平台门控未生效，已移除）：静止 DOWN 暂存；500 ms 内抬起合成连续 DOWN/UP，不重放接收端等待；移动超过 8 个视频像素即提交起点并实时转发拖动；静止超过 500 ms 开始真实按下，之后按原始 UP 释放。长按触发增加了约 500 ms 判定等待，这是当前兼容方案的明确取舍，并非改变手机系统阈值。桌面鼠标操作 Android 目标同样使用手势提交策略。待提交触摸断线时不补点击，已注入触摸仍 CANCEL。
+
+18 项回归测试通过，包括缺省平台认证启用、等待 350 ms 的静止 tap、真实长按提交、拖动和断线取消。服务已加载；软键盘与刻意长按 UI 复测待用户确认。此策略不能保证任意网络抖动、客户端版本或所有键盘的阈值，后续更精确方案需要客户端显式发送手势语义/时间。

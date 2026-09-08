@@ -116,6 +116,73 @@ class ProtocolTests(unittest.IsolatedAsyncioTestCase):
                          [(100,200,576,1280),(300,400,576,1280),(300,400,576,1280)])
         self.assertFalse(session.down)
 
+    async def test_authenticated_android_target_defers_even_without_client_platform(self):
+        import hashlib
+        reader = asyncio.StreamReader()
+        password = 'test-only-secret'
+        digest = hashlib.sha256(hashlib.sha256((password+'salt').encode()).digest()+b'challenge').digest()
+        reader.feed_data(frame(pb(7,pb(2,digest)+pb(6,pb(10,pb(2,1))))))
+        session = Session(reader,None,SimpleNamespace(),password)
+        session.send = AsyncMock()
+        session.phone.start = AsyncMock(side_effect=RuntimeError('stop after auth'))
+        with patch('local_bridge.secrets.token_hex',side_effect=['salt','challenge']):
+            with self.assertRaisesRegex(RuntimeError,'stop after auth'):
+                await session.run()
+        self.assertTrue(session.mobile_touch)
+
+    async def test_mobile_stationary_tap_does_not_inject_recognizer_dwell(self):
+        reader = asyncio.StreamReader()
+        session = Session(reader,None,SimpleNamespace(),'test-only-secret')
+        session.mobile_touch = True
+        session.phone.width,session.phone.height = 576,1280
+        session.control = AsyncMock()
+        inputs = asyncio.create_task(session.inputs())
+        deadline = asyncio.create_task(session.touch_deadlines())
+        try:
+            reader.feed_data(frame(pb(10,pb(2,200)+pb(3,400)))+frame(pb(10,pb(1,9))))
+            await asyncio.sleep(.35)
+            session.control.assert_not_awaited()
+            reader.feed_data(frame(pb(10,pb(1,9)))+frame(pb(10,pb(1,10)))+frame(pb(19,pb(9,'close'))))
+            await inputs
+            self.assertEqual([c.args[0][1] for c in session.control.await_args_list], [0,1])
+        finally:
+            inputs.cancel(); deadline.cancel()
+            await asyncio.gather(inputs,deadline,return_exceptions=True)
+
+    async def test_mobile_deliberate_hold_commits_before_release(self):
+        session = Session(None,None,SimpleNamespace(),'test-only-secret')
+        session.mobile_touch = True
+        session.phone.width,session.phone.height = 576,1280
+        session.down = True
+        session.pending_since = __import__('time').monotonic() - .51
+        session.control = AsyncMock()
+        deadline = asyncio.create_task(session.touch_deadlines())
+        try:
+            await asyncio.sleep(.01)
+            self.assertEqual([c.args[0][1] for c in session.control.await_args_list], [0])
+            await session.release()
+            self.assertEqual([c.args[0][1] for c in session.control.await_args_list], [0,3])
+        finally:
+            deadline.cancel()
+            await asyncio.gather(deadline,return_exceptions=True)
+
+    async def test_mobile_drag_commits_and_pending_disconnect_does_not_tap(self):
+        reader = asyncio.StreamReader()
+        for mask,x,y in [(0,100,200),(9,0,0),(0,300,400),(10,0,0)]:
+            reader.feed_data(frame(pb(10,pb(1,mask)+pb(2,x*2)+pb(3,y*2))))
+        reader.feed_data(frame(pb(19,pb(9,'close'))))
+        session = Session(reader,None,SimpleNamespace(),'test-only-secret')
+        session.mobile_touch = True
+        session.phone.width,session.phone.height = 576,1280
+        session.control = AsyncMock()
+        await session.inputs()
+        self.assertEqual([c.args[0][1] for c in session.control.await_args_list], [0,2,1])
+        session.control.reset_mock()
+        session.down = True
+        session.touch_injected = False
+        await session.release()
+        session.control.assert_not_awaited()
+
     async def test_mobile_back_home_and_recents_wire_events(self):
         # Back=button 8; Home=short middle; Apps=500 ms middle. No action on DOWN.
         for events, times, expected in [
