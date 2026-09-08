@@ -31,7 +31,7 @@ RustDesk 现有文件仅 core_main.rs（独立配置初始化）、server.rs（�
 
 固定 RustDesk 源码 `flutter/lib/common/widgets/remote_input.dart` 在移动被控端的 onLongPressDown 和 onTapUp 路径都可发送 DOWN；worker 原来把重复 DOWN 直接注入，违反单触点的事件序列。scrcpy 4.1 Controller.injectTouch 不会替调用方去重，重复 ACTION_DOWN 会再次设置 lastTouchDown。修复为状态转换式注入：已按下时忽略重复 DOWN，未按下时忽略 UP，保留 MOVE、真实长按和断线取消。新增接收侧 held_ms / duplicate_downs / write_ms 诊断，不记录坐标或文本。
 
-13 项测试通过，服务已重启加载修复；运行时已观察重复 DOWN 被去重及抬起写入耗时低于 1 ms。用户界面结果仍以复测反馈为准，不能把网络中继延迟都归因于此缺陷。
+13 项测试通过，服务已重启加载修复；运行时已观察重复 DOWN 被去重及抬起写入耗时低于 1 ms。用户随后在 iOS 复测轻点、拖动和刻意长按，反馈“可以了，几个操作都正常了”。该输入修复已通过用户真机复测；不能把网络中继延迟都归因于此缺陷。
 
 网络检查：该会话实际存在到 Relay 的 TCP 连接，路由经过 Mac 的 TUN 接口；先验证 RustDesk 流量排除 TUN，再测直连或更近中继。没有修改全局代理、手机长按阈值或人为截短按压。
 
