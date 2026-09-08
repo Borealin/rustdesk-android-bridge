@@ -36,3 +36,11 @@ RustDesk 现有文件仅 core_main.rs（独立配置初始化）、server.rs（�
 网络检查：该会话实际存在到 Relay 的 TCP 连接，路由经过 Mac 的 TUN 接口；先验证 RustDesk 流量排除 TUN，再测直连或更近中继。没有修改全局代理、手机长按阈值或人为截短按压。
 
 源码依据：[scrcpy 4.1 Controller](https://github.com/Genymobile/scrcpy/blob/v4.1/server/src/main/java/com/genymobile/scrcpy/control/Controller.java)、[RustDesk 1.4.7 remote_input.dart](https://github.com/rustdesk/rustdesk/blob/0c86d4616298f09435f6236599b300964aa61460/flutter/lib/common/widgets/remote_input.dart)。
+
+## 移动端导航键映射修复
+
+客户端 `InputModel.onMobileBack` 对 1.3.8+ 被控端发送 Back 鼠标键（button 8），旧客户端使用 right（button 2）；worker 原来只处理 button 2，导致新版返回无效。`onMobileHome` 发送中键点击（button 4），`onMobileApps` 则发送中键 DOWN、等待 500 ms、再发送 UP；worker 原来在 DOWN 就执行 HOME，因此最近应用也变成 HOME。
+
+修复在 UP 执行返回，并对中键按住时长采用上游 Android 的 200 ms 分界，分别发送 Android HOME=3 / APP_SWITCH=187。为避免异步定时任务和断线后的延迟操作，两者均在中键释放时执行；因此最近应用比上游 200 ms 定时触发稍晚，通常在客户端 500 ms 释放后出现。重复中键 DOWN 不重置计时，孤立 UP 不执行动作。正常触摸路径未修改。
+
+14 项协议与配置测试通过，服务已重启加载。客户端三键的 UI 验收待用户复测。依据为固定版本 `flutter/lib/models/input_model.dart` 的 onMobileBack/onMobileHome/onMobileApps，以及 Android InputService.kt 的中键分界逻辑。

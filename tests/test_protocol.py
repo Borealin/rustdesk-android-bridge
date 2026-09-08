@@ -4,7 +4,7 @@ import sys
 import unittest
 import tempfile
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -115,6 +115,29 @@ class ProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([struct.unpack('>iiHH',p[10:22]) for p in packets],
                          [(100,200,576,1280),(300,400,576,1280),(300,400,576,1280)])
         self.assertFalse(session.down)
+
+    async def test_mobile_back_home_and_recents_wire_events(self):
+        # Back=button 8; Home=short middle; Apps=500 ms middle. No action on DOWN.
+        for events, times, expected in [
+            ([65,66], [], 4), ([17,18], [], 4),
+            ([33,34], [10.0,10.01], 3), ([33,34], [10.0,10.5], 187),
+            ([33,33,34], [10.0,10.5], 187),
+            ([33], [10.0], None), ([34], [], None),
+        ]:
+            reader = asyncio.StreamReader()
+            for mask in events:
+                reader.feed_data(frame(pb(10,pb(1,mask))))
+            reader.feed_data(frame(pb(19,pb(9,'close'))))
+            session = Session(reader,None,SimpleNamespace(),'test-only-secret')
+            session.control = AsyncMock()
+            # Replace this module's time binding, not the event loop clock.
+            with patch('local_bridge.time') as clock:
+                clock.monotonic.side_effect = times
+                await session.inputs()
+            if expected is None:
+                session.control.assert_not_awaited()
+            else:
+                session.control.assert_awaited_once_with(keycode(expected,0)+keycode(expected,1))
 
     async def test_mobile_duplicate_down_and_orphan_up_are_not_injected(self):
         reader = asyncio.StreamReader()

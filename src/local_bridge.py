@@ -208,6 +208,7 @@ class Session:
         self.x = self.y = 0
         self.press_started = None
         self.duplicate_downs = 0
+        self.middle_started = None
         self.frames = self.events = self.acks = 0
         self.tasks = []
 
@@ -342,9 +343,21 @@ class Session:
                         self.press_started = None
                 elif kind == 0 and self.down:
                     await self.control(touch(2, self.x, self.y, self.phone.width, self.phone.height))
-                elif kind == 1 and button in (2, 4):
-                    code = 4 if button == 2 else 3
+                elif kind == 2 and button in (2, 8):
+                    # Current mobile clients use Back; retain the old right-button alias.
+                    await self.control(keycode(4, 0) + keycode(4, 1))
+                    LOG.info("navigation action=back")
+                elif button == 4 and kind == 1:
+                    if self.middle_started is None:
+                        self.middle_started = time.monotonic()
+                elif button == 4 and kind == 2 and self.middle_started is not None:
+                    # RustDesk's Apps button holds middle for 500 ms; its Android
+                    # host distinguishes a long middle press at 200 ms.
+                    held_ms = (time.monotonic() - self.middle_started) * 1000
+                    self.middle_started = None
+                    code = 187 if held_ms >= 200 else 3
                     await self.control(keycode(code, 0) + keycode(code, 1))
+                    LOG.info("navigation action=%s held_ms=%.1f", "recents" if code == 187 else "home", held_ms)
                 elif kind in (3, 4):
                     dx, dy = unzigzag(e.get(2, 0)), unzigzag(e.get(3, 0))
                     await self.control(struct.pack(">BiiHHhhI", 3, self.x, self.y, self.phone.width,
